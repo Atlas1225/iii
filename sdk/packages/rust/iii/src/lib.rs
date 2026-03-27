@@ -5,6 +5,7 @@ pub mod iii;
 pub mod logger;
 pub mod protocol;
 pub mod stream;
+pub mod structs;
 #[cfg(feature = "otel")]
 pub mod telemetry;
 pub mod triggers;
@@ -28,6 +29,7 @@ pub use protocol::{
     RegisterTriggerMessage, RegisterTriggerTypeMessage, TriggerAction, TriggerRequest,
 };
 pub use stream::{Streams, UpdateBuilder};
+pub use structs::{AuthInput, AuthResult, MiddlewareFunctionInput};
 pub use triggers::{Trigger, TriggerConfig, TriggerHandler};
 pub use types::{
     ApiRequest, ApiResponse, Channel, FieldPath, StreamUpdateInput, UpdateOp, UpdateResult,
@@ -47,6 +49,8 @@ pub use serde_json::Value;
 pub struct InitOptions {
     /// Custom worker metadata. Auto-detected if `None`.
     pub metadata: Option<WorkerMetadata>,
+    /// Custom HTTP headers sent during the WebSocket handshake.
+    pub headers: Option<std::collections::HashMap<String, String>>,
     /// OpenTelemetry configuration. Requires the `otel` feature.
     #[cfg(feature = "otel")]
     pub otel: Option<crate::telemetry::types::OtelConfig>,
@@ -78,6 +82,7 @@ pub struct InitOptions {
 pub fn register_worker(address: &str, options: InitOptions) -> III {
     let InitOptions {
         metadata,
+        headers,
         #[cfg(feature = "otel")]
         otel,
     } = options;
@@ -87,6 +92,10 @@ pub fn register_worker(address: &str, options: InitOptions) -> III {
     } else {
         III::new(address)
     };
+
+    if let Some(h) = headers {
+        iii.set_headers(h);
+    }
 
     #[cfg(feature = "otel")]
     if let Some(cfg) = otel {
