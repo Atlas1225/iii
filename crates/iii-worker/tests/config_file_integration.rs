@@ -361,7 +361,9 @@ async fn add_many_with_invalid_worker_returns_nonzero() {
 #[tokio::test]
 async fn handle_managed_add_builtin_creates_config() {
     in_temp_dir_async(|| async {
-        let exit_code = iii_worker::cli::managed::handle_managed_add("iii-http", false, None).await;
+        let exit_code =
+            iii_worker::cli::managed::handle_managed_add("iii-http", false, None, false, false)
+                .await;
         assert_eq!(
             exit_code, 0,
             "expected success exit code for builtin worker"
@@ -390,7 +392,7 @@ async fn handle_managed_add_builtin_merges_existing() {
         .unwrap();
 
         let exit_code =
-            iii_worker::cli::managed::handle_managed_add("iii-http", false, None)
+            iii_worker::cli::managed::handle_managed_add("iii-http", false, None, false, false)
                 .await;
         assert_eq!(exit_code, 0, "expected success exit code for merge");
 
@@ -411,7 +413,8 @@ async fn handle_managed_add_all_builtins_succeed() {
         for name in iii_worker::cli::builtin_defaults::BUILTIN_NAMES {
             let _ = std::fs::remove_file("config.yaml");
 
-            let exit_code = iii_worker::cli::managed::handle_managed_add(name, false, None).await;
+            let exit_code =
+                iii_worker::cli::managed::handle_managed_add(name, false, None, false, false).await;
             assert_eq!(exit_code, 0, "expected success for builtin '{}'", name);
 
             let content = std::fs::read_to_string("config.yaml").unwrap();
@@ -471,6 +474,117 @@ async fn remove_many_with_missing_worker_returns_nonzero() {
             !iii_worker::cli::config_file::worker_exists("iii-http"),
             "iii-http should be removed despite other failure"
         );
+    })
+    .await;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// handle_managed_add --force tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn handle_managed_add_force_builtin_re_adds() {
+    in_temp_dir_async(|| async {
+        // First add creates config
+        let exit_code =
+            iii_worker::cli::managed::handle_managed_add("iii-http", false, None, false, false)
+                .await;
+        assert_eq!(exit_code, 0);
+        let content = std::fs::read_to_string("config.yaml").unwrap();
+        assert!(content.contains("- name: iii-http"));
+
+        // Force re-add succeeds (builtins have no artifacts to delete)
+        let exit_code =
+            iii_worker::cli::managed::handle_managed_add("iii-http", false, None, true, false)
+                .await;
+        assert_eq!(exit_code, 0);
+        let content = std::fs::read_to_string("config.yaml").unwrap();
+        assert!(content.contains("- name: iii-http"));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn handle_managed_add_force_reset_config_clears_overrides() {
+    in_temp_dir_async(|| async {
+        // Pre-populate with user overrides
+        std::fs::write(
+            "config.yaml",
+            "workers:\n  - name: iii-http\n    config:\n      port: 9999\n      custom_key: preserved\n",
+        )
+        .unwrap();
+
+        // Force with reset_config should clear user overrides and re-apply defaults
+        let exit_code =
+            iii_worker::cli::managed::handle_managed_add("iii-http", false, None, true, true)
+                .await;
+        assert_eq!(exit_code, 0);
+
+        let content = std::fs::read_to_string("config.yaml").unwrap();
+        assert!(content.contains("- name: iii-http"));
+        // Builtin defaults should be present
+        assert!(content.contains("default_timeout"));
+        // User override should NOT be preserved (reset_config wipes it)
+        assert!(!content.contains("custom_key"));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn handle_managed_add_force_without_reset_preserves_config() {
+    in_temp_dir_async(|| async {
+        // Pre-populate with user overrides
+        std::fs::write(
+            "config.yaml",
+            "workers:\n  - name: iii-http\n    config:\n      port: 9999\n      custom_key: preserved\n",
+        )
+        .unwrap();
+
+        // Force WITHOUT reset_config should preserve user overrides
+        let exit_code =
+            iii_worker::cli::managed::handle_managed_add("iii-http", false, None, true, false)
+                .await;
+        assert_eq!(exit_code, 0);
+
+        let content = std::fs::read_to_string("config.yaml").unwrap();
+        assert!(content.contains("- name: iii-http"));
+        // User override preserved via merge
+        assert!(content.contains("9999"));
+        assert!(content.contains("custom_key"));
+    })
+    .await;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// handle_managed_clear tests
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn handle_managed_clear_single_no_artifacts() {
+    in_temp_dir_async(|| async {
+        // Clear a worker that has no artifacts — should succeed silently
+        let exit_code = iii_worker::cli::managed::handle_managed_clear(Some("pdfkit"), true);
+        assert_eq!(exit_code, 0);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn handle_managed_clear_invalid_name() {
+    in_temp_dir_async(|| async {
+        // Clear with an invalid name (contains path traversal)
+        let exit_code = iii_worker::cli::managed::handle_managed_clear(Some("../etc"), true);
+        assert_eq!(exit_code, 1);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn handle_managed_clear_all_no_artifacts() {
+    in_temp_dir_async(|| async {
+        // Clear all when nothing is installed — should succeed
+        let exit_code = iii_worker::cli::managed::handle_managed_clear(None, true);
+        assert_eq!(exit_code, 0);
     })
     .await;
 }
