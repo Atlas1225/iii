@@ -11,6 +11,7 @@
 //! for crash isolation.
 
 use anyhow::{Context, Result};
+use colored::Colorize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -39,6 +40,8 @@ pub async fn run_dev(
     vcpus: u32,
     ram_mib: u32,
     rootfs: PathBuf,
+    background: bool,
+    worker_name: &str,
 ) -> i32 {
     let self_exe = match std::env::current_exe() {
         Ok(p) => p,
@@ -91,8 +94,61 @@ pub async fn run_dev(
 
     cmd.stdin(std::process::Stdio::null());
 
+    if background {
+        let logs_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".iii/logs")
+            .join(worker_name);
+        if let Err(e) = std::fs::create_dir_all(&logs_dir) {
+            eprintln!("{} Failed to create logs dir: {}", "error:".red(), e);
+            return 1;
+        }
+        let stdout_file = match std::fs::File::create(logs_dir.join("stdout.log")) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("{} Failed to create stdout log: {}", "error:".red(), e);
+                return 1;
+            }
+        };
+        let stderr_file = match std::fs::File::create(logs_dir.join("stderr.log")) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("{} Failed to create stderr log: {}", "error:".red(), e);
+                return 1;
+            }
+        };
+        cmd.stdout(stdout_file).stderr(stderr_file);
+    }
+
     match cmd.spawn() {
         Ok(mut child) => {
+            // Write PID file so is_worker_running / stop / kill_stale_worker can find us
+            let pid_file = rootfs.join("vm.pid");
+            let pid = child.id().unwrap_or(0);
+            if pid > 0 {
+                if let Err(e) = std::fs::write(&pid_file, pid.to_string()) {
+                    eprintln!(
+                        "{} Failed to write PID file {}: {}",
+                        "error:".red(),
+                        pid_file.display(),
+                        e
+                    );
+                    // Kill the child so we don't leave an untracked VM running
+                    let _ = child.kill().await;
+                    return 1;
+                }
+            }
+
+            if background {
+                eprintln!(
+                    "  {} {} started (pid: {})",
+                    "✓".green(),
+                    worker_name.bold(),
+                    pid
+                );
+                return 0;
+            }
+
             let exit_code = tokio::select! {
                 result = child.wait() => {
                     match result {
@@ -112,8 +168,11 @@ pub async fn run_dev(
                 }
             };
 
+            // Clean up PID file on exit
+            let _ = std::fs::remove_file(&pid_file);
+
             #[cfg(unix)]
-            super::super::dev::restore_terminal_cooked_mode();
+            super::super::local_worker::restore_terminal_cooked_mode();
 
             exit_code
         }
