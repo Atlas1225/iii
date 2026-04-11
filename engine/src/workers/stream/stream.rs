@@ -74,6 +74,18 @@ async fn ws_handler(
 ) -> impl IntoResponse {
     let module = module.clone();
 
+    let has_authorization_protocol = headers
+        .get("sec-websocket-protocol")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(',').any(|p| p.trim() == "Authorization"))
+        .unwrap_or(false);
+
+    let ws = if has_authorization_protocol {
+        ws.protocols(["Authorization"])
+    } else {
+        ws
+    };
+
     if let Some(auth_function) = module.auth_function.clone() {
         let engine = module.engine.clone();
         let input = StreamAuthInput {
