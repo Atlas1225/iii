@@ -75,10 +75,11 @@ async fn ws_handler(
     let module = module.clone();
 
     let has_authorization_protocol = headers
-        .get("sec-websocket-protocol")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(',').any(|p| p.trim() == "Authorization"))
-        .unwrap_or(false);
+        .get_all("sec-websocket-protocol")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|s| s.split(','))
+        .any(|p| p.trim() == "Authorization");
 
     let ws = if has_authorization_protocol {
         ws.protocols(["Authorization"])
